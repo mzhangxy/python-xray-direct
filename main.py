@@ -89,8 +89,36 @@ server_thread = threading.Thread(target=httpd.serve_forever)
 server_thread.daemon = True
 server_thread.start()
 
-# Generate xr-ay config file (终极修复版：移除Socks代理、移除DNS强制覆盖、修正回落顺序)
+# Generate xr-ay config file (动态解析平台强制代理出站)
 def generate_config():
+    # 自动嗅探平台生成的 .pc.conf 代理配置
+    proxy_address, proxy_port = None, None
+    try:
+        if os.path.exists('.pc.conf'):
+            with open('.pc.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('socks5'):
+                        parts = line.strip().split()
+                        if len(parts) >= 3:
+                            proxy_address, proxy_port = parts[1], int(parts[2])
+    except Exception as e:
+        print(f"Error reading .pc.conf: {e}")
+
+    # 构建出站规则：优先走平台内网 Socks5 代理，如果没有提取到则回落为直连
+    outbounds = []
+    if proxy_address and proxy_port:
+        outbounds.append({
+            "protocol": "socks",
+            "tag": "platform-proxy",
+            "settings": {
+                "servers": [{"address": proxy_address, "port": proxy_port}]
+            }
+        })
+        print(f"Loaded platform proxy: {proxy_address}:{proxy_port}")
+    else:
+        outbounds.append({"protocol": "freedom"})
+        print("Warning: No .pc.conf found, using freedom outbound")
+
     config = {
         "log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "warning"},
         "inbounds": [
@@ -117,11 +145,7 @@ def generate_config():
                 "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "metadataOnly": False}
             }
         ],
-        "outbounds": [
-            {
-                "protocol": "freedom"
-            }
-        ],
+        "outbounds": outbounds,
         "routing": {
             "domainStrategy": "AsIs",
             "rules": []
