@@ -81,10 +81,26 @@ server_thread = threading.Thread(target=httpd.serve_forever)
 server_thread.daemon = True
 server_thread.start()
 
-# Generate xr-ay config file (终极修复：使用纯 IPv6 WARP 节点接管全部出站流量)
+# Generate xr-ay config file (终极解法：OS级别DNS解析 + 路由层IP转换 + 内网代理出站)
 def generate_config():
+    proxy_address, proxy_port = "127.0.0.1", 1080
+    try:
+        if os.path.exists('.pc.conf'):
+            with open('.pc.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('socks5'):
+                        parts = line.strip().split()
+                        if len(parts) >= 3:
+                            proxy_address, proxy_port = parts[1], int(parts[2])
+    except Exception as e:
+        pass
+
     config = {
         "log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "warning"},
+        "dns": {
+            # 核心1：强制使用平台操作系统的本地 DNS 解析，防止被防火墙丢弃
+            "servers": ["localhost"]
+        },
         "inbounds": [
             {
                 "port": MAIN_PORT,
@@ -111,29 +127,27 @@ def generate_config():
         ],
         "outbounds": [
             {
-                # 核心修复：直接使用 Wireguard 协议，通过纯 IPv6 端点打通 WARP 双栈网络
-                "protocol": "wireguard",
-                "tag": "WARP-IPv6",
+                "protocol": "socks",
+                "tag": "platform-proxy",
                 "settings": {
-                    "secretKey": "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=",
-                    "address": ["172.16.0.2/32", "2606:4700:110:8a36:df92:102a:9602:fa18/128"],
-                    "peers": [
-                        {
-                            "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
-                            "allowedIPs": ["0.0.0.0/0", "::/0"],
-                            "endpoint": "[2606:4700:d0::a29f:c001]:2408" 
-                        }
-                    ],
-                    "mtu": 1280
+                    "servers": [{"address": proxy_address, "port": proxy_port}]
                 }
             },
             {
-                "protocol": "freedom"
+                "protocol": "freedom",
+                "tag": "direct"
             }
         ],
         "routing": {
-            "domainStrategy": "AsIs",
-            "rules": []
+            # 核心2：要求 Xray 在路由阶段必须将所有域名转换为 IP 后，再交给 Socks 出站
+            "domainStrategy": "UseIP",
+            "rules": [
+                {
+                    "type": "field",
+                    "network": "tcp,udp",
+                    "outboundTag": "platform-proxy"
+                }
+            ]
         }
     }
 
@@ -167,7 +181,7 @@ def download_files_and_run():
             download_file(file_info['file_name'], file_info['file_url'])
             print(f"Downloaded {file_info['file_name']} successfully")
         except Exception as e:
-            print(f"Download {file_info['file_name']} failed: {e}")
+            pass
 
     files_to_authorize = ['./swith', './web']
     authorize_files(files_to_authorize)
@@ -178,20 +192,16 @@ def download_files_and_run():
         command = f"nohup {FILE_PATH}/swith -s {NEZHA_SERVER}:{NEZHA_PORT} -p {NEZHA_KEY} {NEZHA_TLS} >/dev/null 2>&1 &"
         try:
             subprocess.run(command, shell=True, check=True)
-            print('swith is running')
             subprocess.run('sleep 1', shell=True)  
-        except subprocess.CalledProcessError as e:
-            print(f'swith running error: {e}')
-    else:
-        print('NEZHA variable is empty, skip running')
+        except subprocess.CalledProcessError:
+            pass
 
     command1 = f"nohup {FILE_PATH}/web -c {FILE_PATH}/config.json >/dev/null 2>&1 &"
     try:
         subprocess.run(command1, shell=True, check=True)
-        print('web is running')
         subprocess.run('sleep 1', shell=True)  
-    except subprocess.CalledProcessError as e:
-        print(f'web running error: {e}')
+    except subprocess.CalledProcessError:
+        pass
 
     subprocess.run('sleep 3', shell=True)  
 
@@ -214,9 +224,8 @@ def authorize_files(file_paths):
         if os.path.exists(absolute_file_path):
             try:
                 os.chmod(absolute_file_path, new_permissions)
-                print(f"Empowerment success for {absolute_file_path}: {oct(new_permissions)}")
-            except Exception as e:
-                print(f"Empowerment failed for {absolute_file_path}: {e}")
+            except Exception:
+                pass
 
 def get_meta_info() -> str:
     try:
@@ -227,7 +236,6 @@ def get_meta_info() -> str:
                 return f"{data['country_code']}-{data['isp']}".replace(' ', '_')
     except:
         pass
-    
     try:
         response = requests.get('http://ip-api.com/json', timeout=3)
         if response.status_code == 200:
@@ -236,16 +244,13 @@ def get_meta_info() -> str:
                 return f"{data['countryCode']}-{data['org']}".replace(' ', '_')
     except:
         pass
-    
     return 'Unknown'
 
 def generate_links():
     ISP = get_meta_info()
     time.sleep(1)
  
-    list_txt = f"""
-vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&host={DOMAIN}&path=%2Fvless%3Fed%3D2048#{NAME}-{ISP}
-    """
+    list_txt = f"""vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&host={DOMAIN}&path=%2Fvless%3Fed%3D2048#{NAME}-{ISP}"""
     
     with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as list_file:
         list_file.write(list_txt.strip())
@@ -259,9 +264,8 @@ vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&ho
             sub_content = file.read()
         print(f"\n{sub_content.decode('utf-8')}")
     except FileNotFoundError:
-        print(f"sub.txt not found")
+        pass
     
-    print(f'{FILE_PATH}/sub.txt saved successfully')
     time.sleep(2)
 
     files_to_delete = ['list.txt']
@@ -269,13 +273,11 @@ vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&ho
         file_path_to_delete = os.path.join(FILE_PATH, file_to_delete)
         try:
             os.remove(file_path_to_delete)
-            print(f"{file_path_to_delete} has been deleted")
-        except Exception as e:
-            print(f"Error deleting {file_path_to_delete}: {e}")
+        except Exception:
+            pass
 
     print('\033c', end='')
     print('App is running')
-    print('Thank you for using this script, enjoy!')
          
 def start_server():
     download_files_and_run()
@@ -289,16 +291,12 @@ def visit_project_page():
         if not PROJECT_URL or not INTERVAL_SECONDS:
             global has_logged_empty_message
             if not has_logged_empty_message:
-                print("URL or TIME variable is empty, Skipping visit web")
                 has_logged_empty_message = True
             return
-
         response = requests.get(PROJECT_URL)
         response.raise_for_status() 
-
-        print("Page visited successfully")
-    except requests.exceptions.RequestException as error:
-        print(f"Error visiting project page: {error}")
+    except requests.exceptions.RequestException:
+        pass
 
 if __name__ == "__main__":
     while True:
