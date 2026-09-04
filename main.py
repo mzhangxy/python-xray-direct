@@ -81,44 +81,10 @@ server_thread = threading.Thread(target=httpd.serve_forever)
 server_thread.daemon = True
 server_thread.start()
 
-# Generate xr-ay config file (终极修复：启用 DoH 并在出站强制 IP 解析)
+# Generate xr-ay config file (终极修复：使用纯 IPv6 WARP 节点接管全部出站流量)
 def generate_config():
-    proxy_address, proxy_port = None, None
-    try:
-        if os.path.exists('.pc.conf'):
-            with open('.pc.conf', 'r') as f:
-                for line in f:
-                    if line.startswith('socks5'):
-                        parts = line.strip().split()
-                        if len(parts) >= 3:
-                            proxy_address, proxy_port = parts[1], int(parts[2])
-    except Exception as e:
-        print(f"Error reading .pc.conf: {e}")
-
-    outbounds = []
-    if proxy_address and proxy_port:
-        outbounds.append({
-            "protocol": "socks",
-            "tag": "platform-proxy",
-            "settings": {
-                "servers": [{"address": proxy_address, "port": proxy_port}]
-            },
-            # 核心修复：强制 Xray 将域名解析为纯 IPv4 地址后再发给 SOCKS 代理
-            "domainStrategy": "UseIPv4" 
-        })
-        print(f"Loaded platform proxy: {proxy_address}:{proxy_port}")
-    else:
-        outbounds.append({"protocol": "freedom"})
-
     config = {
         "log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "warning"},
-        # 配合 UseIPv4 使用的安全 DoH 解析
-        "dns": {
-            "servers": [
-                "https+local://8.8.4.4/dns-query",
-                "https+local://1.1.1.1/dns-query"
-            ]
-        },
         "inbounds": [
             {
                 "port": MAIN_PORT,
@@ -143,7 +109,28 @@ def generate_config():
                 "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "metadataOnly": False}
             }
         ],
-        "outbounds": outbounds,
+        "outbounds": [
+            {
+                # 核心修复：直接使用 Wireguard 协议，通过纯 IPv6 端点打通 WARP 双栈网络
+                "protocol": "wireguard",
+                "tag": "WARP-IPv6",
+                "settings": {
+                    "secretKey": "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=",
+                    "address": ["172.16.0.2/32", "2606:4700:110:8a36:df92:102a:9602:fa18/128"],
+                    "peers": [
+                        {
+                            "publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=",
+                            "allowedIPs": ["0.0.0.0/0", "::/0"],
+                            "endpoint": "[2606:4700:d0::a29f:c001]:2408" 
+                        }
+                    ],
+                    "mtu": 1280
+                }
+            },
+            {
+                "protocol": "freedom"
+            }
+        ],
         "routing": {
             "domainStrategy": "AsIs",
             "rules": []
