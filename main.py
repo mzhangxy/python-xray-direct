@@ -14,27 +14,24 @@ app = Flask(__name__)
 
 # Set environment variables
 FILE_PATH = os.environ.get('FILE_PATH', './temp')
-PROJECT_URL = os.environ.get('URL', '') # 填写项目分配的url可实现自动访问，留空即不启用该功能
-INTERVAL_SECONDS = int(os.environ.get("TIME", 120))                   # 访问间隔时间，默认120s，单位：秒
+PROJECT_URL = os.environ.get('URL', '') 
+INTERVAL_SECONDS = int(os.environ.get("TIME", 120))                   
 UUID = os.environ.get('UUID', '0ac02acc-698c-42f9-aa1d-5fe356bb6f4d')
-NEZHA_SERVER = os.environ.get('NEZHA_SERVER', '')        # 哪吒3个变量不全不运行
-NEZHA_PORT = os.environ.get('NEZHA_PORT', '')            # 哪吒端口为443时开启tls
+NEZHA_SERVER = os.environ.get('NEZHA_SERVER', '')        
+NEZHA_PORT = os.environ.get('NEZHA_PORT', '')            
 NEZHA_KEY = os.environ.get('NEZHA_KEY', '')
-DOMAIN = os.environ.get('DOMAIN', 'linkbot-tkpql.puratya.com')   # 分配的域名或反代的域名，不带前缀
+DOMAIN = os.environ.get('DOMAIN', 'linkbot-tkpql.puratya.com')   
 NAME = os.environ.get('NAME', 'Purayta')
 
-# 核心修改：分离主端口与回落端口
-MAIN_PORT = int(os.environ.get('PORT', 3000))        # 平台分配的主外部监听端口 (供 Xray 监听)
-FALLBACK_PORT = 3001                                 # Python 网页使用的内部回落端口
+MAIN_PORT = int(os.environ.get('PORT', 3000))        
+FALLBACK_PORT = 3001                                 
 
-# Create directory if it doesn't exist
 if not os.path.exists(FILE_PATH):
     os.makedirs(FILE_PATH)
     print(f"{FILE_PATH} has been created")
 else:
     print(f"{FILE_PATH} already exists")
 
-# Clean old files
 paths_to_delete = ['list.txt', 'sub.txt', 'swith', 'web']
 for file in paths_to_delete:
     file_path = os.path.join(FILE_PATH, file)
@@ -44,16 +41,13 @@ for file in paths_to_delete:
     except Exception as e:
         print(f"Skip Delete {file_path}")
 
-# http server
 class MyHandler(http.server.SimpleHTTPRequestHandler):
-
     def log_message(self, format, *args):
         pass
 
     def do_GET(self):
         if self.path == '/':
             try:
-                # 尝试读取当前目录下的 index.html 文件
                 with open('index.html', 'rb') as file:
                     content = file.read()
                 self.send_response(200)
@@ -61,7 +55,6 @@ class MyHandler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(content)
             except FileNotFoundError:
-                # 如果没有找到 index.html，自动回落显示纯文本
                 self.send_response(200)
                 self.send_header('Content-Type', 'text/plain; charset=utf-8')
                 self.end_headers()
@@ -83,15 +76,13 @@ class MyHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'Not found')
 
-# 绑定回落端口
 httpd = socketserver.TCPServer(('', FALLBACK_PORT), MyHandler)
 server_thread = threading.Thread(target=httpd.serve_forever)
 server_thread.daemon = True
 server_thread.start()
 
-# Generate xr-ay config file (动态解析平台强制代理出站)
+# Generate xr-ay config file (终极修复：启用 DoH 并在出站强制 IP 解析)
 def generate_config():
-    # 自动嗅探平台生成的 .pc.conf 代理配置
     proxy_address, proxy_port = None, None
     try:
         if os.path.exists('.pc.conf'):
@@ -104,7 +95,6 @@ def generate_config():
     except Exception as e:
         print(f"Error reading .pc.conf: {e}")
 
-    # 构建出站规则：优先走平台内网 Socks5 代理，如果没有提取到则回落为直连
     outbounds = []
     if proxy_address and proxy_port:
         outbounds.append({
@@ -112,15 +102,23 @@ def generate_config():
             "tag": "platform-proxy",
             "settings": {
                 "servers": [{"address": proxy_address, "port": proxy_port}]
-            }
+            },
+            # 核心修复：强制 Xray 将域名解析为纯 IPv4 地址后再发给 SOCKS 代理
+            "domainStrategy": "UseIPv4" 
         })
         print(f"Loaded platform proxy: {proxy_address}:{proxy_port}")
     else:
         outbounds.append({"protocol": "freedom"})
-        print("Warning: No .pc.conf found, using freedom outbound")
 
     config = {
         "log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "warning"},
+        # 配合 UseIPv4 使用的安全 DoH 解析
+        "dns": {
+            "servers": [
+                "https+local://8.8.4.4/dns-query",
+                "https+local://1.1.1.1/dns-query"
+            ]
+        },
         "inbounds": [
             {
                 "port": MAIN_PORT,
@@ -157,7 +155,6 @@ def generate_config():
 
 generate_config()
 
-# Determine system architecture
 def get_system_architecture():
     arch = os.uname().machine
     if 'arm' in arch or 'aarch64' in arch or 'arm64' in arch:
@@ -165,13 +162,11 @@ def get_system_architecture():
     else:
         return 'amd'
 
-# Download file
 def download_file(file_name, file_url):
     file_path = os.path.join(FILE_PATH, file_name)
     with requests.get(file_url, stream=True) as response, open(file_path, 'wb') as file:
         shutil.copyfileobj(response.raw, file)
 
-# Download and run files
 def download_files_and_run():
     architecture = get_system_architecture()
     files_to_download = get_files_for_architecture(architecture)
@@ -187,11 +182,9 @@ def download_files_and_run():
         except Exception as e:
             print(f"Download {file_info['file_name']} failed: {e}")
 
-    # Authorize and run
     files_to_authorize = ['./swith', './web']
     authorize_files(files_to_authorize)
 
-    # Run ne-zha
     NEZHA_TLS = ''
     if NEZHA_SERVER and NEZHA_PORT and NEZHA_KEY:
         NEZHA_TLS = '--tls' if NEZHA_PORT == '443' else ''
@@ -199,24 +192,22 @@ def download_files_and_run():
         try:
             subprocess.run(command, shell=True, check=True)
             print('swith is running')
-            subprocess.run('sleep 1', shell=True)  # Wait for 1 second
+            subprocess.run('sleep 1', shell=True)  
         except subprocess.CalledProcessError as e:
             print(f'swith running error: {e}')
     else:
         print('NEZHA variable is empty, skip running')
 
-    # Run xr-ay
     command1 = f"nohup {FILE_PATH}/web -c {FILE_PATH}/config.json >/dev/null 2>&1 &"
     try:
         subprocess.run(command1, shell=True, check=True)
         print('web is running')
-        subprocess.run('sleep 1', shell=True)  # Wait for 1 second
+        subprocess.run('sleep 1', shell=True)  
     except subprocess.CalledProcessError as e:
         print(f'web running error: {e}')
 
-    subprocess.run('sleep 3', shell=True)  # Wait for 3 seconds
+    subprocess.run('sleep 3', shell=True)  
 
-# Return file information based on system architecture (按需下载探针)
 def get_files_for_architecture(architecture):
     files = []
     if architecture == 'arm':
@@ -229,7 +220,6 @@ def get_files_for_architecture(architecture):
             files.append({'file_name': 'swith', 'file_url': 'https://amd64.oooen.com/v1'})
     return files
 
-# Authorize files
 def authorize_files(file_paths):
     new_permissions = 0o775
     for relative_file_path in file_paths:
@@ -241,7 +231,6 @@ def authorize_files(file_paths):
             except Exception as e:
                 print(f"Empowerment failed for {absolute_file_path}: {e}")
 
-# 获取服务器地区与 ISP 信息
 def get_meta_info() -> str:
     try:
         response = requests.get('https://api.ip.sb/geoip', timeout=3)
@@ -263,7 +252,6 @@ def get_meta_info() -> str:
     
     return 'Unknown'
 
-# Generate list and sub info
 def generate_links():
     ISP = get_meta_info()
     time.sleep(1)
@@ -289,7 +277,6 @@ vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&ho
     print(f'{FILE_PATH}/sub.txt saved successfully')
     time.sleep(2)
 
-    # 修复：移除 config.json 的删除逻辑，防止节点崩溃
     files_to_delete = ['list.txt']
     for file_to_delete in files_to_delete:
         file_path_to_delete = os.path.join(FILE_PATH, file_to_delete)
@@ -303,13 +290,11 @@ vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&ho
     print('App is running')
     print('Thank you for using this script, enjoy!')
          
-# Run the callback
 def start_server():
     download_files_and_run()
     generate_links()
 start_server()
 
-# auto visit project page
 has_logged_empty_message = False
 
 def visit_project_page():
