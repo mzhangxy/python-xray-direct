@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 # Set environment variables
 FILE_PATH = os.environ.get('FILE_PATH', './temp')
-PROJECT_URL = os.environ.get('URL', '') # 填写项目分配的url可实现自动访问，例如：https://www.google.com，留空即不启用该功能
+PROJECT_URL = os.environ.get('URL', '') # 填写项目分配的url可实现自动访问，留空即不启用该功能
 INTERVAL_SECONDS = int(os.environ.get("TIME", 120))                   # 访问间隔时间，默认120s，单位：秒
 UUID = os.environ.get('UUID', '0ac02acc-698c-42f9-aa1d-5fe356bb6f4d')
 NEZHA_SERVER = os.environ.get('NEZHA_SERVER', '')        # 哪吒3个变量不全不运行
@@ -22,8 +22,8 @@ NEZHA_PORT = os.environ.get('NEZHA_PORT', '')                  # 哪吒端口为
 NEZHA_KEY = os.environ.get('NEZHA_KEY', '')
 DOMAIN = os.environ.get('DOMAIN', 'linkbot-tkpql.puratya.com')                 # 分配的域名或反代的域名，不带前缀
 NAME = os.environ.get('NAME', 'Purayta')
-PORT = 3000            # http服务端口
-VPORT = int(os.environ.get('VPORT', 443))          # 节点端口,游戏玩具类需改为分配的端口,并关闭节点的tls
+PORT = 3000                                          # Python HTTP服务监听端口（内部回落端口）
+VPORT = int(os.environ.get('VPORT', 45000))          # Xray监听端口（平台主入口端口）
 
 # Create directory if it doesn't exist
 if not os.path.exists(FILE_PATH):
@@ -33,7 +33,7 @@ else:
     print(f"{FILE_PATH} already exists")
 
 # Clean old files
-paths_to_delete = ['list.txt','sub.txt', 'swith', 'web']
+paths_to_delete = ['list.txt', 'sub.txt', 'swith', 'web']
 for file in paths_to_delete:
     file_path = os.path.join(FILE_PATH, file)
     try:
@@ -77,7 +77,59 @@ server_thread.start()
 
 # Generate xr-ay config file
 def generate_config():
-    config = {"log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "none",}, "inbounds": [{"port": VPORT, "listen": "0.0.0.0", "protocol": "vless", "settings": {"clients": [{"id": UUID, "flow": "xtls-rprx-vision"}], "decryption": "none", "fallbacks": [{"dest": 3001}, {"path": "/vless", "dest": 3002},],}, "streamSettings": {"network": "tcp",},}, {"port": 3001, "listen": "127.0.0.1", "protocol": "vless", "settings": {"clients": [{"id": UUID}], "decryption": "none"}, "streamSettings": {"network": "ws", "security": "none"}}, {"port": 3002, "listen": "127.0.0.1", "protocol": "vless", "settings": {"clients": [{"id": UUID, "level": 0}], "decryption": "none"}, "streamSettings": {"network": "ws", "security": "none", "wsSettings": {"path": "/vless"}}, "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "metadataOnly": False}},], "dns": {"servers": ["https+local://8.8.8.8/dns-query"]}, "outbounds": [{"protocol": "freedom"}, {"tag": "WARP", "protocol": "wireguard", "settings": {"secretKey": "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=", "address": ["172.16.0.2/32", "2606:4700:110:8a36:df92:102a:9602:fa18/128"], "peers": [{"publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", "allowedIPs": ["0.0.0.0/0", "::/0"], "endpoint": "162.159.193.10:2408"}], "reserved": [78, 135, 76], "mtu": 1280}},], "routing": {"domainStrategy": "AsIs", "rules": [{"type": "field", "domain": ["domain:openai.com", "domain:ai.com"], "outboundTag": "WARP"},]}}
+    config = {
+        "log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "none"},
+        "inbounds": [
+            {
+                "port": VPORT,
+                "listen": "0.0.0.0",
+                "protocol": "vless",
+                "settings": {
+                    "clients": [{"id": UUID, "flow": "xtls-rprx-vision"}],
+                    "decryption": "none",
+                    "fallbacks": [
+                        {"dest": PORT},
+                        {"path": "/vless", "dest": 3002}
+                    ]
+                },
+                "streamSettings": {"network": "tcp"}
+            },
+            {
+                "port": 3001,
+                "listen": "127.0.0.1",
+                "protocol": "vless",
+                "settings": {"clients": [{"id": UUID}], "decryption": "none"},
+                "streamSettings": {"network": "ws", "security": "none"}
+            },
+            {
+                "port": 3002,
+                "listen": "127.0.0.1",
+                "protocol": "vless",
+                "settings": {"clients": [{"id": UUID, "level": 0}], "decryption": "none"},
+                "streamSettings": {"network": "ws", "security": "none", "wsSettings": {"path": "/vless"}},
+                "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "metadataOnly": False}
+            }
+        ],
+        "dns": {"servers": ["https+local://8.8.8.8/dns-query"]},
+        "outbounds": [
+            {"protocol": "freedom"},
+            {
+                "tag": "WARP",
+                "protocol": "wireguard",
+                "settings": {
+                    "secretKey": "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=",
+                    "address": ["172.16.0.2/32", "2606:4700:110:8a36:df92:102a:9602:fa18/128"],
+                    "peers": [{"publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", "allowedIPs": ["0.0.0.0/0", "::/0"], "endpoint": "162.159.193.10:2408"}],
+                    "reserved": [78, 135, 76],
+                    "mtu": 1280
+                }
+            }
+        ],
+        "routing": {
+            "domainStrategy": "AsIs",
+            "rules": [{"type": "field", "domain": ["domain:openai.com", "domain:ai.com"], "outboundTag": "WARP"}]
+        }
+    }
 
     with open(os.path.join(FILE_PATH, 'config.json'), 'w', encoding='utf-8') as config_file:
         json.dump(config, config_file, ensure_ascii=False, indent=2)
@@ -142,7 +194,6 @@ def download_files_and_run():
         print(f'web running error: {e}')
 
     subprocess.run('sleep 3', shell=True)  # Wait for 3 seconds
-	
 
 # Return file information based on system architecture
 def get_files_for_architecture(architecture):
@@ -170,7 +221,6 @@ def authorize_files(file_paths):
         except Exception as e:
             print(f"Empowerment failed for {absolute_file_path}: {e}")
 
-
 # 获取服务器地区与 ISP 信息
 def get_meta_info() -> str:
     try:
@@ -193,10 +243,8 @@ def get_meta_info() -> str:
     
     return 'Unknown'
 
-
 # Generate list and sub info
 def generate_links():
-    # 替换原本脆弱的 curl 代码
     ISP = get_meta_info()
     time.sleep(1)
  
@@ -207,6 +255,10 @@ vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&ho
     
     with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as list_file:
         list_file.write(list_txt)
+
+    sub_txt = base64.b64encode(list_txt.strip().encode('utf-8')).decode('utf-8')
+    with open(os.path.join(FILE_PATH, 'sub.txt'), 'w', encoding='utf-8') as sub_file:
+        sub_file.write(sub_txt)
         
     try:
         with open(os.path.join(FILE_PATH, 'sub.txt'), 'rb') as file:
@@ -219,7 +271,7 @@ vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&ho
     time.sleep(20)
 
     # cleanup files
-    files_to_delete = ['list.txt','config.json']
+    files_to_delete = ['list.txt', 'config.json']
     for file_to_delete in files_to_delete:
         file_path_to_delete = os.path.join(FILE_PATH, file_to_delete)
         try:
@@ -253,7 +305,6 @@ def visit_project_page():
         response = requests.get(PROJECT_URL)
         response.raise_for_status() 
 
-        # print(f"Visiting project page: {PROJECT_URL}")
         print("Page visited successfully")
         print('\033c', end='')
     except requests.exceptions.RequestException as error:
