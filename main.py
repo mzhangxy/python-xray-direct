@@ -50,9 +50,20 @@ class MyHandler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         if self.path == '/':
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b'Hello, world')
+            try:
+                # 尝试读取当前目录下的 index.html 文件
+                with open('index.html', 'rb') as file:
+                    content = file.read()
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(content)
+            except FileNotFoundError:
+                # 如果没有找到 index.html，自动回落显示纯文本
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(b'Hello, world!')
         elif self.path == '/sub':
             try:
                 with open(os.path.join(FILE_PATH, 'sub.txt'), 'rb') as file:
