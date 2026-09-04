@@ -22,8 +22,8 @@ NEZHA_PORT = os.environ.get('NEZHA_PORT', '')                  # 哪吒端口为
 NEZHA_KEY = os.environ.get('NEZHA_KEY', '')
 DOMAIN = os.environ.get('DOMAIN', 'linkbot-tkpql.puratya.com')                 # 分配的域名或反代的域名，不带前缀
 NAME = os.environ.get('NAME', 'Purayta')
-PORT = int(os.environ.get('PORT', 3000))            # http服务端口
-VPORT = int(os.environ.get('VPORT', 45000))          # 节点端口,游戏玩具类需改为分配的端口,并关闭节点的tls
+PORT = 3000            # http服务端口
+VPORT = int(os.environ.get('VPORT', 443))          # 节点端口,游戏玩具类需改为分配的端口,并关闭节点的tls
 
 # Create directory if it doesn't exist
 if not os.path.exists(FILE_PATH):
@@ -171,25 +171,42 @@ def authorize_files(file_paths):
             print(f"Empowerment failed for {absolute_file_path}: {e}")
 
 
+# 获取服务器地区与 ISP 信息
+def get_meta_info() -> str:
+    try:
+        response = requests.get('https://api.ip.sb/geoip', timeout=3)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('country_code') and data.get('isp'):
+                return f"{data['country_code']}-{data['isp']}".replace(' ', '_')
+    except:
+        pass
+    
+    try:
+        response = requests.get('http://ip-api.com/json', timeout=3)
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('status') == 'success' and data.get('countryCode') and data.get('org'):
+                return f"{data['countryCode']}-{data['org']}".replace(' ', '_')
+    except:
+        pass
+    
+    return 'Unknown'
+
 
 # Generate list and sub info
 def generate_links():
-    meta_info = subprocess.run(['curl', '-s', 'https://speed.cloudflare.com/meta'], capture_output=True, text=True)
-    meta_info = meta_info.stdout.split('"')
-    ISP = f"{meta_info[25]}-{meta_info[17]}".replace(' ', '_').strip()
-    time.sleep(2)
+    # 替换原本脆弱的 curl 代码
+    ISP = get_meta_info()
+    time.sleep(1)
  
     list_txt = f"""
-vless://{UUID}@{DOMAIN}:{VPORT}?encryption=none&security=tls&sni={DOMAIN}&type=ws&host={DOMAIN}&path=%2Fvless%3Fed%3D2048#{NAME}-{ISP}
+vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&host={DOMAIN}&path=%2Fvless%3Fed%3D2048#{NAME}-{ISP}
   
     """
     
     with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as list_file:
         list_file.write(list_txt)
-
-    sub_txt = base64.b64encode(list_txt.encode('utf-8')).decode('utf-8')
-    with open(os.path.join(FILE_PATH, 'sub.txt'), 'w', encoding='utf-8') as sub_file:
-        sub_file.write(sub_txt)
         
     try:
         with open(os.path.join(FILE_PATH, 'sub.txt'), 'rb') as file:
