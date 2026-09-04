@@ -18,9 +18,9 @@ PROJECT_URL = os.environ.get('URL', '') # 填写项目分配的url可实现自�
 INTERVAL_SECONDS = int(os.environ.get("TIME", 120))                   # 访问间隔时间，默认120s，单位：秒
 UUID = os.environ.get('UUID', '0ac02acc-698c-42f9-aa1d-5fe356bb6f4d')
 NEZHA_SERVER = os.environ.get('NEZHA_SERVER', '')        # 哪吒3个变量不全不运行
-NEZHA_PORT = os.environ.get('NEZHA_PORT', '')                  # 哪吒端口为443时开启tls
+NEZHA_PORT = os.environ.get('NEZHA_PORT', '')            # 哪吒端口为443时开启tls
 NEZHA_KEY = os.environ.get('NEZHA_KEY', '')
-DOMAIN = os.environ.get('DOMAIN', 'linkbot-tkpql.puratya.com')                 # 分配的域名或反代的域名，不带前缀
+DOMAIN = os.environ.get('DOMAIN', 'linkbot-tkpql.puratya.com')   # 分配的域名或反代的域名，不带前缀
 NAME = os.environ.get('NAME', 'Purayta')
 
 # 核心修改：分离主端口与回落端口
@@ -89,34 +89,21 @@ server_thread = threading.Thread(target=httpd.serve_forever)
 server_thread.daemon = True
 server_thread.start()
 
-# Generate xr-ay config file
+# Generate xr-ay config file (终极修复版：移除Socks代理、移除DNS强制覆盖、修正回落顺序)
 def generate_config():
-    # 动态解析平台生成的 proxychains 配置，用于 Xray 出站
-    proxy_address, proxy_port = "10.201.0.1", 40001
-    try:
-        if os.path.exists('.pc.conf'):
-            with open('.pc.conf', 'r') as f:
-                for line in f:
-                    if line.startswith('socks5'):
-                        parts = line.strip().split()
-                        if len(parts) >= 3:
-                            proxy_address, proxy_port = parts[1], int(parts[2])
-    except:
-        pass
-
     config = {
-        "log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "none"},
+        "log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "warning"},
         "inbounds": [
             {
                 "port": MAIN_PORT,
                 "listen": "0.0.0.0",
                 "protocol": "vless",
                 "settings": {
-                    "clients": [{"id": UUID, "flow": "xtls-rprx-vision"}],
+                    "clients": [{"id": UUID}],
                     "decryption": "none",
                     "fallbacks": [
-                        {"dest": FALLBACK_PORT},
-                        {"path": "/vless", "dest": 3002}
+                        {"path": "/vless", "dest": 3002},
+                        {"dest": FALLBACK_PORT}
                     ]
                 },
                 "streamSettings": {"network": "tcp"}
@@ -130,17 +117,10 @@ def generate_config():
                 "sniffing": {"enabled": True, "destOverride": ["http", "tls", "quic"], "metadataOnly": False}
             }
         ],
-        "dns": {"servers": ["https+local://8.8.8.8/dns-query"]},
         "outbounds": [
             {
-                # 强制 Xray 走平台的内网 Socks5 代理出站，突破防火墙封锁
-                "protocol": "socks",
-                "tag": "platform-proxy",
-                "settings": {
-                    "servers": [{"address": proxy_address, "port": proxy_port}]
-                }
-            },
-            {"protocol": "freedom"}
+                "protocol": "freedom"
+            }
         ],
         "routing": {
             "domainStrategy": "AsIs",
