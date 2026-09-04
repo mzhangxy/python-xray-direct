@@ -22,8 +22,10 @@ NEZHA_PORT = os.environ.get('NEZHA_PORT', '')                  # 哪吒端口为
 NEZHA_KEY = os.environ.get('NEZHA_KEY', '')
 DOMAIN = os.environ.get('DOMAIN', 'linkbot-tkpql.puratya.com')                 # 分配的域名或反代的域名，不带前缀
 NAME = os.environ.get('NAME', 'Purayta')
-PORT = 3000                                          # Python HTTP服务监听端口（内部回落端口）
-VPORT = int(os.environ.get('VPORT', 45000))          # Xray监听端口（平台主入口端口）
+
+# 核心修改：分离主端口与回落端口
+MAIN_PORT = int(os.environ.get('PORT', 3000))        # 平台分配的主外部监听端口 (供 Xray 监听)
+FALLBACK_PORT = 3001                                 # Python 网页使用的内部回落端口
 
 # Create directory if it doesn't exist
 if not os.path.exists(FILE_PATH):
@@ -81,36 +83,43 @@ class MyHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'Not found')
 
-httpd = socketserver.TCPServer(('', PORT), MyHandler)
+# 绑定回落端口
+httpd = socketserver.TCPServer(('', FALLBACK_PORT), MyHandler)
 server_thread = threading.Thread(target=httpd.serve_forever)
 server_thread.daemon = True
 server_thread.start()
 
 # Generate xr-ay config file
 def generate_config():
+    # 动态解析平台生成的 proxychains 配置，用于 Xray 出站
+    proxy_address, proxy_port = "10.201.0.1", 40001
+    try:
+        if os.path.exists('.pc.conf'):
+            with open('.pc.conf', 'r') as f:
+                for line in f:
+                    if line.startswith('socks5'):
+                        parts = line.strip().split()
+                        if len(parts) >= 3:
+                            proxy_address, proxy_port = parts[1], int(parts[2])
+    except:
+        pass
+
     config = {
         "log": {"access": "/dev/null", "error": "/dev/null", "loglevel": "none"},
         "inbounds": [
             {
-                "port": VPORT,
+                "port": MAIN_PORT,
                 "listen": "0.0.0.0",
                 "protocol": "vless",
                 "settings": {
                     "clients": [{"id": UUID, "flow": "xtls-rprx-vision"}],
                     "decryption": "none",
                     "fallbacks": [
-                        {"dest": PORT},
+                        {"dest": FALLBACK_PORT},
                         {"path": "/vless", "dest": 3002}
                     ]
                 },
                 "streamSettings": {"network": "tcp"}
-            },
-            {
-                "port": 3001,
-                "listen": "127.0.0.1",
-                "protocol": "vless",
-                "settings": {"clients": [{"id": UUID}], "decryption": "none"},
-                "streamSettings": {"network": "ws", "security": "none"}
             },
             {
                 "port": 3002,
@@ -123,22 +132,19 @@ def generate_config():
         ],
         "dns": {"servers": ["https+local://8.8.8.8/dns-query"]},
         "outbounds": [
-            {"protocol": "freedom"},
             {
-                "tag": "WARP",
-                "protocol": "wireguard",
+                # 强制 Xray 走平台的内网 Socks5 代理出站，突破防火墙封锁
+                "protocol": "socks",
+                "tag": "platform-proxy",
                 "settings": {
-                    "secretKey": "YFYOAdbw1bKTHlNNi+aEjBM3BO7unuFC5rOkMRAz9XY=",
-                    "address": ["172.16.0.2/32", "2606:4700:110:8a36:df92:102a:9602:fa18/128"],
-                    "peers": [{"publicKey": "bmXOC+F1FxEMF9dyiK2H5/1SUtzH0JuVo51h2wPfgyo=", "allowedIPs": ["0.0.0.0/0", "::/0"], "endpoint": "162.159.193.10:2408"}],
-                    "reserved": [78, 135, 76],
-                    "mtu": 1280
+                    "servers": [{"address": proxy_address, "port": proxy_port}]
                 }
-            }
+            },
+            {"protocol": "freedom"}
         ],
         "routing": {
             "domainStrategy": "AsIs",
-            "rules": [{"type": "field", "domain": ["domain:openai.com", "domain:ai.com"], "outboundTag": "WARP"}]
+            "rules": []
         }
     }
 
@@ -206,31 +212,30 @@ def download_files_and_run():
 
     subprocess.run('sleep 3', shell=True)  # Wait for 3 seconds
 
-# Return file information based on system architecture
+# Return file information based on system architecture (按需下载探针)
 def get_files_for_architecture(architecture):
+    files = []
     if architecture == 'arm':
-        return [
-            {'file_name': 'swith', 'file_url': 'https://arm64.oooen.com/v1'},
-            {'file_name': 'web', 'file_url': 'https://arm64.oooen.com/web'},
-        ]
+        files.append({'file_name': 'web', 'file_url': 'https://arm64.oooen.com/web'})
+        if NEZHA_SERVER and NEZHA_KEY:
+            files.append({'file_name': 'swith', 'file_url': 'https://arm64.oooen.com/v1'})
     elif architecture == 'amd':
-        return [
-            {'file_name': 'swith', 'file_url': 'https://amd64.oooen.com/v1'},
-            {'file_name': 'web', 'file_url': 'https://amd64.oooen.com/web'},
-        ]
-    return []
+        files.append({'file_name': 'web', 'file_url': 'https://amd64.oooen.com/web'})
+        if NEZHA_SERVER and NEZHA_KEY:
+            files.append({'file_name': 'swith', 'file_url': 'https://amd64.oooen.com/v1'})
+    return files
 
 # Authorize files
 def authorize_files(file_paths):
     new_permissions = 0o775
-
     for relative_file_path in file_paths:
         absolute_file_path = os.path.join(FILE_PATH, relative_file_path)
-        try:
-            os.chmod(absolute_file_path, new_permissions)
-            print(f"Empowerment success for {absolute_file_path}: {oct(new_permissions)}")
-        except Exception as e:
-            print(f"Empowerment failed for {absolute_file_path}: {e}")
+        if os.path.exists(absolute_file_path):
+            try:
+                os.chmod(absolute_file_path, new_permissions)
+                print(f"Empowerment success for {absolute_file_path}: {oct(new_permissions)}")
+            except Exception as e:
+                print(f"Empowerment failed for {absolute_file_path}: {e}")
 
 # 获取服务器地区与 ISP 信息
 def get_meta_info() -> str:
@@ -261,11 +266,10 @@ def generate_links():
  
     list_txt = f"""
 vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&host={DOMAIN}&path=%2Fvless%3Fed%3D2048#{NAME}-{ISP}
-  
     """
     
     with open(os.path.join(FILE_PATH, 'list.txt'), 'w', encoding='utf-8') as list_file:
-        list_file.write(list_txt)
+        list_file.write(list_txt.strip())
 
     sub_txt = base64.b64encode(list_txt.strip().encode('utf-8')).decode('utf-8')
     with open(os.path.join(FILE_PATH, 'sub.txt'), 'w', encoding='utf-8') as sub_file:
@@ -279,10 +283,10 @@ vless://{UUID}@{DOMAIN}:443?encryption=none&security=tls&sni={DOMAIN}&type=ws&ho
         print(f"sub.txt not found")
     
     print(f'{FILE_PATH}/sub.txt saved successfully')
-    time.sleep(20)
+    time.sleep(2)
 
-    # cleanup files
-    files_to_delete = ['list.txt', 'config.json']
+    # 修复：移除 config.json 的删除逻辑，防止节点崩溃
+    files_to_delete = ['list.txt']
     for file_to_delete in files_to_delete:
         file_path_to_delete = os.path.join(FILE_PATH, file_to_delete)
         try:
@@ -317,7 +321,6 @@ def visit_project_page():
         response.raise_for_status() 
 
         print("Page visited successfully")
-        print('\033c', end='')
     except requests.exceptions.RequestException as error:
         print(f"Error visiting project page: {error}")
 
